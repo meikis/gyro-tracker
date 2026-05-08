@@ -439,6 +439,97 @@
       background: rgba(0, 255, 136, 0.25);
     }
 
+    .btn-flat-calibrate {
+      background: rgba(0, 240, 255, 0.15);
+      color: var(--accent);
+      border: 1px solid rgba(0, 240, 255, 0.3);
+      font-size: 0.75rem;
+      padding: 10px 12px;
+    }
+
+    .btn-flat-calibrate:active {
+      background: rgba(0, 240, 255, 0.25);
+    }
+
+    .btn-cancel {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--muted);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      font-size: 0.7rem;
+      padding: 8px 16px;
+      margin-top: 12px;
+    }
+
+    .cal-hint {
+      position: fixed;
+      inset: 0;
+      background: rgba(6, 11, 20, 0.95);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      backdrop-filter: blur(10px);
+    }
+
+    .cal-hint.hidden { display: none; }
+
+    .cal-hint-content {
+      background: var(--panel);
+      border: 1px solid rgba(0, 240, 255, 0.3);
+      border-radius: 16px;
+      padding: 32px 40px;
+      text-align: center;
+      max-width: 300px;
+    }
+
+    .cal-hint-icon {
+      font-size: 3rem;
+      margin-bottom: 16px;
+      animation: float 2s ease-in-out infinite;
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-10px); }
+    }
+
+    .cal-hint-title {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 1.2rem;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+
+    .cal-hint-text {
+      color: var(--text);
+      font-size: 0.9rem;
+      margin-bottom: 20px;
+    }
+
+    .cal-hint-progress {
+      height: 4px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-bottom: 12px;
+    }
+
+    .cal-hint-bar {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--success));
+      width: 0%;
+      transition: width 0.2s;
+    }
+
+    .cal-hint-status {
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    .cal-hint.done .cal-hint-status {
+      color: var(--success);
+    }
+
     /* 波形条 */
     .bar-viz {
       display: flex;
@@ -583,6 +674,20 @@
     <div class="controls">
       <button class="btn btn-reset" id="resetBtn">重置轨迹</button>
       <button class="btn btn-calibrate" id="calBtn">零点校准</button>
+      <button class="btn btn-flat-calibrate" id="flatCalBtn">📱 平面校准</button>
+    </div>
+
+    <div class="cal-hint hidden" id="calHint">
+      <div class="cal-hint-content">
+        <div class="cal-hint-icon">📱</div>
+        <div class="cal-hint-title">平面校准</div>
+        <div class="cal-hint-text">请将手机平放在桌面上</div>
+        <div class="cal-hint-progress">
+          <div class="cal-hint-bar" id="calProgressBar"></div>
+        </div>
+        <div class="cal-hint-status" id="calStatus">检测中...</div>
+        <button class="btn btn-cancel" id="calCancelBtn">取消</button>
+      </div>
     </div>
   </div>
 
@@ -599,7 +704,15 @@
       lastT: null,
       history: [],
       cal: { x: 0, y: 0, z: 0 },
-      bars: { dist: [], accel: [], rot: [], ori: [] }
+      calOri: { alpha: 0, beta: 0, gamma: 0 },
+      bars: { dist: [], accel: [], rot: [], ori: [] },
+      flatCal: {
+        active: false,
+        samples: [],
+        collecting: false,
+        ready: false,
+        progress: 0
+      }
     };
 
     const MAX_POINTS = 800;
@@ -611,6 +724,11 @@
     const permBtn = document.getElementById('permBtn');
     const resetBtn = document.getElementById('resetBtn');
     const calBtn = document.getElementById('calBtn');
+    const flatCalBtn = document.getElementById('flatCalBtn');
+    const calHint = document.getElementById('calHint');
+    const calProgressBar = document.getElementById('calProgressBar');
+    const calStatus = document.getElementById('calStatus');
+    const calCancelBtn = document.getElementById('calCancelBtn');
     const canvas = document.getElementById('trajectory');
     const ctx = canvas.getContext('2d');
 
@@ -688,7 +806,7 @@
 
       const now = performance.now();
       let dt = state.lastT ? (now - state.lastT) / 1000 : 0.016;
-      if (dt > 0.1) dt = 0.016; // 防止跳变
+      if (dt > 0.1) dt = 0.016;
       state.lastT = now;
 
       const ax = (acc.x || 0) - state.cal.x;
@@ -699,7 +817,6 @@
       state.accY = ay;
       state.accZ = az;
 
-      // 旋转速度
       const rot = e.rotationRate || {};
       state.rotA = rot.alpha || 0;
       state.rotB = rot.beta || 0;
@@ -738,13 +855,9 @@
 
     // ============ 更新显示 ============
     function updatePhone() {
-      // CSS 3D 旋转：注意坐标系映射
-      // beta: X轴旋转 (前后俯仰)
-      // gamma: Y轴旋转 (左右翻滚)
-      // alpha: Z轴旋转 (指南针方向，需要 around Z)
-      const a = state.alpha;
-      const b = state.beta;
-      const g = state.gamma;
+      const a = state.alpha - state.calOri.alpha;
+      const b = state.beta - state.calOri.beta;
+      const g = state.gamma - state.calOri.gamma;
 
       phone3d.style.transform = `rotateZ(${a}deg) rotateX(${b}deg) rotateY(${g}deg)`;
 
@@ -930,11 +1043,109 @@
       state.cal.x = state.accX;
       state.cal.y = state.accY;
       state.cal.z = state.accZ;
+      state.calOri.alpha = state.alpha;
+      state.calOri.beta = state.beta;
+      state.calOri.gamma = state.gamma;
       state.vx = 0; state.vy = 0;
-      // 视觉反馈
       calBtn.textContent = '已校准';
       setTimeout(() => calBtn.textContent = '零点校准', 1000);
     });
+
+    flatCalBtn.addEventListener('click', startFlatCalibration);
+
+    calCancelBtn.addEventListener('click', cancelFlatCalibration);
+
+    function startFlatCalibration() {
+      if (!state.permission) {
+        alert('请先开启传感器权限');
+        return;
+      }
+      state.flatCal.active = true;
+      state.flatCal.samples = [];
+      state.flatCal.collecting = false;
+      state.flatCal.ready = false;
+      state.flatCal.progress = 0;
+      calHint.classList.remove('hidden', 'done');
+      calProgressBar.style.width = '0%';
+      calStatus.textContent = '检测中...';
+      updateFlatCalibration();
+    }
+
+    function cancelFlatCalibration() {
+      state.flatCal.active = false;
+      calHint.classList.add('hidden');
+    }
+
+    function updateFlatCalibration() {
+      if (!state.flatCal.active) return;
+
+      const beta = state.beta;
+      const gamma = state.gamma;
+      const isFlat = Math.abs(beta) < 15 && Math.abs(gamma) < 15;
+
+      if (isFlat && !state.flatCal.collecting) {
+        state.flatCal.collecting = true;
+        state.flatCal.samples = [];
+        calStatus.textContent = '保持静止...';
+      }
+
+      if (state.flatCal.collecting) {
+        state.flatCal.samples.push({
+          accX: state.accX,
+          accY: state.accY,
+          accZ: state.accZ,
+          alpha: state.alpha,
+          beta: state.beta,
+          gamma: state.gamma
+        });
+
+        const progress = Math.min((state.flatCal.samples.length / 30) * 100, 100);
+        state.flatCal.progress = progress;
+        calProgressBar.style.width = progress + '%';
+
+        if (state.flatCal.samples.length >= 30) {
+          finishFlatCalibration();
+          return;
+        }
+      } else {
+        const angleScore = Math.max(0, 100 - (Math.abs(beta) + Math.abs(gamma)));
+        calProgressBar.style.width = (angleScore / 2) + '%';
+        calStatus.textContent = `倾斜: ${beta.toFixed(0)}° / ${gamma.toFixed(0)}°`;
+      }
+
+      requestAnimationFrame(updateFlatCalibration);
+    }
+
+    function finishFlatCalibration() {
+      const samples = state.flatCal.samples;
+      if (samples.length === 0) {
+        cancelFlatCalibration();
+        return;
+      }
+
+      const avg = (arr, key) => arr.reduce((s, v) => s + v[key], 0) / arr.length;
+
+      state.cal.x = avg(samples, 'accX');
+      state.cal.y = avg(samples, 'accY');
+      state.cal.z = avg(samples, 'accZ');
+      state.calOri.alpha = avg(samples, 'alpha');
+      state.calOri.beta = avg(samples, 'beta');
+      state.calOri.gamma = avg(samples, 'gamma');
+
+      state.vx = 0;
+      state.vy = 0;
+      state.flatCal.active = false;
+      state.flatCal.ready = true;
+
+      calHint.classList.add('done');
+      calStatus.textContent = '校准完成!';
+      flatCalBtn.textContent = '✓ 已校准';
+
+      setTimeout(() => {
+        calHint.classList.add('hidden');
+        flatCalBtn.textContent = '📱 平面校准';
+      }, 1500);
+    }
 
     // ============ 启动 ============
     // 如果在非HTTPS或桌面环境，显示模拟数据按钮
