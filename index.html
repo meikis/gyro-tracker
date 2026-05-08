@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Gyro Tracker - 运动姿态监测</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Orbitron:wght@400;700;900&display=swap');
+
+    :root {
+      --bg: #060b14;
+      --panel: #0f172a;
+      --accent: #00f0ff;
+      --accent2: #ff0055;
+      --text: #e2e8f0;
+      --muted: #64748b;
+      --grid: rgba(0, 240, 255, 0.08);
+      --success: #00ff88;
+      --warning: #ffcc00;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      overflow-x: hidden;
+      min-height: 100vh;
+      position: relative;
+    }
+
+    /* 背景网格 */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(var(--grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      position: relative;
+      z-index: 1;
+      max-width: 480px;
+      margin: 0 auto;
+      padding: 20px 16px 40px;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 24px;
+      padding-top: 8px;
+    }
+
+    h1 {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 1.6rem;
+      font-weight: 900;
+      letter-spacing: 2px;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      text-transform: uppercase;
+    }
+
+    .subtitle {
+      font-size: 0.65rem;
+      color: var(--muted);
+      letter-spacing: 4px;
+      margin-top: 4px;
+    }
+
+    /* 权限按钮 */
+    .permission-btn {
+      display: block;
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, var(--accent), #0088ff);
+      border: none;
+      border-radius: 12px;
+      color: #000;
+      font-family: 'Orbitron', sans-serif;
+      font-weight: 700;
+      font-size: 1rem;
+      letter-spacing: 1px;
+      cursor: pointer;
+      margin-bottom: 20px;
+      box-shadow: 0 0 20px rgba(0, 240, 255, 0.3);
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .permission-btn:active {
+      transform: scale(0.97);
+      box-shadow: 0 0 30px rgba(0, 240, 255, 0.5);
+    }
+
+    .permission-btn.hidden { display: none; }
+
+    /* 状态指示器 */
+    .status-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    .status-pill {
+      flex: 1;
+      min-width: 80px;
+      background: var(--panel);
+      border: 1px solid rgba(0, 240, 255, 0.2);
+      border-radius: 8px;
+      padding: 8px 12px;
+      text-align: center;
+      font-size: 0.6rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .status-pill .label { color: var(--muted); display: block; margin-bottom: 2px; }
+    .status-pill .value { color: var(--accent); font-weight: 700; font-size: 0.8rem; }
+    .status-pill.active { border-color: var(--success); box-shadow: 0 0 10px rgba(0, 255, 136, 0.1); }
+    .status-pill.active .value { color: var(--success); }
+
+    /* 3D 手机展示区 */
+    .phone-stage {
+      background: var(--panel);
+      border: 1px solid rgba(0, 240, 255, 0.15);
+      border-radius: 16px;
+      padding: 30px 20px;
+      margin-bottom: 20px;
+      position: relative;
+      overflow: hidden;
+      min-height: 260px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      perspective: 800px;
+    }
+
+    .phone-stage::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 16px;
+      box-shadow: inset 0 0 40px rgba(0, 240, 255, 0.05);
+      pointer-events: none;
+    }
+
+    .hud-label {
+      position: absolute;
+      top: 12px;
+      left: 16px;
+      font-size: 0.6rem;
+      color: var(--muted);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+
+    .hud-coords {
+      position: absolute;
+      top: 12px;
+      right: 16px;
+      font-size: 0.6rem;
+      color: var(--accent);
+      text-align: right;
+      line-height: 1.6;
+    }
+
+    /* CSS 3D 手机 */
+    .phone3d {
+      width: 120px;
+      height: 220px;
+      position: relative;
+      transform-style: preserve-3d;
+      transition: transform 0.05s linear;
+    }
+
+    .phone-face {
+      position: absolute;
+      border-radius: 16px;
+      backface-visibility: visible;
+    }
+
+    .phone-front {
+      width: 120px;
+      height: 220px;
+      background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+      border: 2px solid rgba(0, 240, 255, 0.4);
+      transform: translateZ(8px);
+      box-shadow: 0 0 20px rgba(0, 240, 255, 0.15);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .phone-screen {
+      width: 100px;
+      height: 170px;
+      background: linear-gradient(180deg, rgba(0, 240, 255, 0.1), rgba(0, 240, 255, 0.02));
+      border-radius: 10px;
+      border: 1px solid rgba(0, 240, 255, 0.2);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .phone-screen::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: -50%;
+      width: 200%;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      animation: scan 2s linear infinite;
+    }
+
+    @keyframes scan {
+      0% { transform: translateY(-80px); opacity: 0; }
+      30% { opacity: 1; }
+      70% { opacity: 1; }
+      100% { transform: translateY(80px); opacity: 0; }
+    }
+
+    .phone-notch {
+      width: 40px;
+      height: 4px;
+      background: var(--muted);
+      border-radius: 2px;
+      margin-bottom: 4px;
+    }
+
+    .phone-back {
+      width: 120px;
+      height: 220px;
+      background: linear-gradient(180deg, #334155 0%, #1e293b 100%);
+      border: 2px solid rgba(255, 255, 255, 0.1);
+      transform: rotateY(180deg) translateZ(8px);
+    }
+
+    .phone-side-left {
+      width: 16px;
+      height: 216px;
+      background: #1e293b;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      transform: rotateY(-90deg) translateZ(8px);
+      left: -8px;
+      top: 2px;
+    }
+
+    .phone-side-right {
+      width: 16px;
+      height: 216px;
+      background: #1e293b;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      transform: rotateY(90deg) translateZ(8px);
+      right: -8px;
+      top: 2px;
+    }
+
+    .phone-side-top {
+      width: 116px;
+      height: 16px;
+      background: #1e293b;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      transform: rotateX(90deg) translateZ(8px);
+      top: -8px;
+      left: 2px;
+    }
+
+    .phone-side-bottom {
+      width: 116px;
+      height: 16px;
+      background: #1e293b;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      transform: rotateX(-90deg) translateZ(8px);
+      bottom: -8px;
+      left: 2px;
+    }
+
+    /* 轴向指示 */
+    .axis-indicator {
+      position: absolute;
+      bottom: 12px;
+      left: 16px;
+      font-size: 0.55rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .axis-x { color: #ff0055; }
+    .axis-y { color: #00ff88; }
+    .axis-z { color: #00f0ff; }
+
+    /* 轨迹画布 */
+    .track-panel {
+      background: var(--panel);
+      border: 1px solid rgba(0, 240, 255, 0.15);
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 20px;
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .panel-title {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 0.75rem;
+      letter-spacing: 2px;
+      color: var(--text);
+    }
+
+    .panel-stats {
+      font-size: 0.6rem;
+      color: var(--accent);
+      text-align: right;
+    }
+
+    canvas#trajectory {
+      width: 100%;
+      height: 240px;
+      background: radial-gradient(circle at center, rgba(0, 240, 255, 0.03) 0%, transparent 70%);
+      border-radius: 10px;
+      border: 1px solid rgba(0, 240, 255, 0.1);
+    }
+
+    /* 数据网格 */
+    .data-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .data-card {
+      background: var(--panel);
+      border: 1px solid rgba(0, 240, 255, 0.1);
+      border-radius: 12px;
+      padding: 14px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .data-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 3px;
+      height: 100%;
+      background: var(--accent);
+      opacity: 0.6;
+    }
+
+    .data-card-title {
+      font-size: 0.55rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 6px;
+    }
+
+    .data-card-value {
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: var(--accent);
+      font-family: 'Orbitron', sans-serif;
+    }
+
+    .data-card-unit {
+      font-size: 0.6rem;
+      color: var(--muted);
+      margin-left: 2px;
+    }
+
+    .data-card-sub {
+      font-size: 0.55rem;
+      color: var(--muted);
+      margin-top: 4px;
+      display: flex;
+      gap: 8px;
+    }
+
+    /* 控制按钮 */
+    .controls {
+      display: flex;
+      gap: 12px;
+    }
+
+    .btn {
+      flex: 1;
+      padding: 14px;
+      border-radius: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      font-size: 0.8rem;
+      letter-spacing: 1px;
+      border: none;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-transform: uppercase;
+    }
+
+    .btn-reset {
+      background: rgba(255, 0, 85, 0.15);
+      color: var(--accent2);
+      border: 1px solid rgba(255, 0, 85, 0.3);
+    }
+
+    .btn-reset:active {
+      background: rgba(255, 0, 85, 0.25);
+    }
+
+    .btn-calibrate {
+      background: rgba(0, 255, 136, 0.15);
+      color: var(--success);
+      border: 1px solid rgba(0, 255, 136, 0.3);
+    }
+
+    .btn-calibrate:active {
+      background: rgba(0, 255, 136, 0.25);
+    }
+
+    /* 波形条 */
+    .bar-viz {
+      display: flex;
+      align-items: flex-end;
+      gap: 3px;
+      height: 30px;
+      margin-top: 8px;
+    }
+
+    .bar {
+      flex: 1;
+      background: linear-gradient(to top, var(--accent), transparent);
+      border-radius: 2px 2px 0 0;
+      min-height: 2px;
+      transition: height 0.1s;
+    }
+
+    /* 装饰角标 */
+    .corner {
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      border: 2px solid var(--accent);
+      opacity: 0.4;
+    }
+    .corner-tl { top: 8px; left: 8px; border-right: none; border-bottom: none; }
+    .corner-tr { top: 8px; right: 8px; border-left: none; border-bottom: none; }
+    .corner-bl { bottom: 8px; left: 8px; border-right: none; border-top: none; }
+    .corner-br { bottom: 8px; right: 8px; border-left: none; border-top: none; }
+
+    /* 响应式 */
+    @media (max-width: 360px) {
+      h1 { font-size: 1.3rem; }
+      .phone3d { transform: scale(0.85); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Gyro Tracker</h1>
+      <div class="subtitle">Motion & Orientation Monitor</div>
+    </header>
+
+    <button id="permBtn" class="permission-btn">开启传感器权限</button>
+
+    <div class="status-bar">
+      <div class="status-pill" id="stGyro">
+        <span class="label">Gyro</span>
+        <span class="value">OFF</span>
+      </div>
+      <div class="status-pill" id="stAccel">
+        <span class="label">Accel</span>
+        <span class="value">OFF</span>
+      </div>
+      <div class="status-pill" id="stTrack">
+        <span class="label">Track</span>
+        <span class="value">0 pts</span>
+      </div>
+    </div>
+
+    <!-- 3D 手机 -->
+    <div class="phone-stage">
+      <div class="corner corner-tl"></div>
+      <div class="corner corner-tr"></div>
+      <div class="corner corner-bl"></div>
+      <div class="corner corner-br"></div>
+      <div class="hud-label">Live Attitude</div>
+      <div class="hud-coords" id="hudCoords">
+        A: 0°<br>B: 0°<br>G: 0°
+      </div>
+      <div class="phone3d" id="phone3d">
+        <div class="phone-face phone-front">
+          <div class="phone-notch"></div>
+          <div class="phone-screen"></div>
+        </div>
+        <div class="phone-face phone-back"></div>
+        <div class="phone-face phone-side-left"></div>
+        <div class="phone-face phone-side-right"></div>
+        <div class="phone-face phone-side-top"></div>
+        <div class="phone-face phone-side-bottom"></div>
+      </div>
+      <div class="axis-indicator">
+        <span class="axis-x">■ X (Roll)</span><br>
+        <span class="axis-y">■ Y (Pitch)</span><br>
+        <span class="axis-z">■ Z (Yaw)</span>
+      </div>
+    </div>
+
+    <!-- 数据卡片区 -->
+    <div class="data-grid">
+      <div class="data-card">
+        <div class="data-card-title">Distance</div>
+        <div class="data-card-value" id="distVal">0.00<span class="data-card-unit">m</span></div>
+        <div class="data-card-sub">
+          <span>Speed: <span id="speedVal">0.00</span> m/s</span>
+        </div>
+        <div class="bar-viz" id="distBars"></div>
+      </div>
+      <div class="data-card">
+        <div class="data-card-title">Acceleration</div>
+        <div class="data-card-value" id="accelVal">0.00<span class="data-card-unit">m/s²</span></div>
+        <div class="data-card-sub">
+          <span class="axis-x">x:<span id="ax">0</span></span>
+          <span class="axis-y">y:<span id="ay">0</span></span>
+          <span class="axis-z">z:<span id="az">0</span></span>
+        </div>
+        <div class="bar-viz" id="accelBars"></div>
+      </div>
+      <div class="data-card">
+        <div class="data-card-title">Rotation Rate</div>
+        <div class="data-card-value" id="rotVal">0.0<span class="data-card-unit">°/s</span></div>
+        <div class="data-card-sub">
+          <span class="axis-x">α:<span id="ra">0</span></span>
+          <span class="axis-y">β:<span id="rb">0</span></span>
+          <span class="axis-z">γ:<span id="rg">0</span></span>
+        </div>
+        <div class="bar-viz" id="rotBars"></div>
+      </div>
+      <div class="data-card">
+        <div class="data-card-title">Orientation</div>
+        <div class="data-card-value" id="oriVal">0°</div>
+        <div class="data-card-sub">
+          <span>Heading: <span id="headingVal">N</span></span>
+        </div>
+        <div class="bar-viz" id="oriBars"></div>
+      </div>
+    </div>
+
+    <!-- 轨迹画布 -->
+    <div class="track-panel">
+      <div class="panel-header">
+        <div class="panel-title">Trajectory Map</div>
+        <div class="panel-stats">
+          <div>Points: <span id="ptCount">0</span></div>
+          <div>Drift: <span id="driftVal">0.00</span>m</div>
+        </div>
+      </div>
+      <canvas id="trajectory"></canvas>
+    </div>
+
+    <div class="controls">
+      <button class="btn btn-reset" id="resetBtn">重置轨迹</button>
+      <button class="btn btn-calibrate" id="calBtn">零点校准</button>
+    </div>
+  </div>
+
+  <script>
+    // ============ 状态 ============
+    const state = {
+      permission: false,
+      alpha: 0, beta: 0, gamma: 0,
+      accX: 0, accY: 0, accZ: 0,
+      rotA: 0, rotB: 0, rotG: 0,
+      vx: 0, vy: 0,
+      px: 0, py: 0,
+      distance: 0,
+      lastT: null,
+      history: [],
+      cal: { x: 0, y: 0, z: 0 },
+      bars: { dist: [], accel: [], rot: [], ori: [] }
+    };
+
+    const MAX_POINTS = 800;
+    const DECAY = 0.92; // 速度衰减（减少漂移）
+    const THRESHOLD = 0.15; // 加速度阈值
+
+    // ============ DOM 元素 ============
+    const phone3d = document.getElementById('phone3d');
+    const permBtn = document.getElementById('permBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const calBtn = document.getElementById('calBtn');
+    const canvas = document.getElementById('trajectory');
+    const ctx = canvas.getContext('2d');
+
+    // 初始化 waveform bars
+    function makeBars(container, count, colorClass) {
+      container.innerHTML = '';
+      const arr = [];
+      for (let i = 0; i < count; i++) {
+        const b = document.createElement('div');
+        b.className = 'bar';
+        container.appendChild(b);
+        arr.push(b);
+      }
+      return arr;
+    }
+
+    state.bars.dist = { el: makeBars(document.getElementById('distBars'), 16), vals: [] };
+    state.bars.accel = { el: makeBars(document.getElementById('accelBars'), 16), vals: [] };
+    state.bars.rot = { el: makeBars(document.getElementById('rotBars'), 16), vals: [] };
+    state.bars.ori = { el: makeBars(document.getElementById('oriBars'), 16), vals: [] };
+
+    // ============ Canvas 尺寸 ============
+    function resizeCanvas() {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    // ============ 权限请求 ============
+    async function requestPermission() {
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        try {
+          const res = await DeviceOrientationEvent.requestPermission();
+          if (res === 'granted') {
+            startListening();
+            permBtn.classList.add('hidden');
+          } else {
+            alert('需要传感器权限才能运行');
+          }
+        } catch (e) {
+          alert('请求权限失败: ' + e.message);
+        }
+      } else {
+        // Android / 非iOS
+        startListening();
+        permBtn.classList.add('hidden');
+      }
+    }
+
+    permBtn.addEventListener('click', requestPermission);
+
+    // ============ 事件监听 ============
+    function startListening() {
+      window.addEventListener('deviceorientation', onOrientation, true);
+      window.addEventListener('devicemotion', onMotion, true);
+      state.permission = true;
+      updatePills();
+    }
+
+    function onOrientation(e) {
+      state.alpha = e.alpha || 0;
+      state.beta = e.beta || 0;
+      state.gamma = e.gamma || 0;
+      updatePhone();
+      updateOriDisplay();
+    }
+
+    function onMotion(e) {
+      const acc = e.acceleration || e.accelerationIncludingGravity;
+      if (!acc) return;
+
+      const now = performance.now();
+      let dt = state.lastT ? (now - state.lastT) / 1000 : 0.016;
+      if (dt > 0.1) dt = 0.016; // 防止跳变
+      state.lastT = now;
+
+      const ax = (acc.x || 0) - state.cal.x;
+      const ay = (acc.y || 0) - state.cal.y;
+      const az = (acc.z || 0) - state.cal.z;
+
+      state.accX = ax;
+      state.accY = ay;
+      state.accZ = az;
+
+      // 旋转速度
+      const rot = e.rotationRate || {};
+      state.rotA = rot.alpha || 0;
+      state.rotB = rot.beta || 0;
+      state.rotG = rot.gamma || 0;
+
+      // 简单的惯性导航（带阈值和衰减）
+      const tx = Math.abs(ax) < THRESHOLD ? 0 : ax;
+      const ty = Math.abs(ay) < THRESHOLD ? 0 : ay;
+
+      state.vx += tx * dt;
+      state.vy += ty * dt;
+      state.vx *= DECAY;
+      state.vy *= DECAY;
+
+      const dx = state.vx * dt;
+      const dy = state.vy * dt;
+
+      state.px += dx * 80; // 放大显示
+      state.py += dy * 80;
+      state.distance += Math.sqrt(dx * dx + dy * dy);
+
+      // 限制范围
+      const boundW = canvas.clientWidth / 2 - 20;
+      const boundH = canvas.clientHeight / 2 - 20;
+      state.px = Math.max(-boundW, Math.min(boundW, state.px));
+      state.py = Math.max(-boundH, Math.min(boundH, state.py));
+
+      // 记录轨迹
+      state.history.push({ x: state.px, y: state.py, t: now });
+      if (state.history.length > MAX_POINTS) state.history.shift();
+
+      updateAccelDisplay();
+      updateRotDisplay();
+      updateTrackDisplay();
+    }
+
+    // ============ 更新显示 ============
+    function updatePhone() {
+      // CSS 3D 旋转：注意坐标系映射
+      // beta: X轴旋转 (前后俯仰)
+      // gamma: Y轴旋转 (左右翻滚)
+      // alpha: Z轴旋转 (指南针方向，需要 around Z)
+      const a = state.alpha;
+      const b = state.beta;
+      const g = state.gamma;
+
+      phone3d.style.transform = `rotateZ(${a}deg) rotateX(${b}deg) rotateY(${g}deg)`;
+
+      document.getElementById('hudCoords').innerHTML =
+        `A: ${a.toFixed(1)}°<br>B: ${b.toFixed(1)}°<br>G: ${g.toFixed(1)}°`;
+    }
+
+    function updateOriDisplay() {
+      const h = state.alpha;
+      const heading = getHeading(h);
+      document.getElementById('oriVal').textContent = h.toFixed(0) + '°';
+      document.getElementById('headingVal').textContent = heading;
+
+      pushBar(state.bars.ori, Math.abs(h) / 360 * 100);
+    }
+
+    function updateAccelDisplay() {
+      const mag = Math.sqrt(state.accX**2 + state.accY**2 + state.accZ**2);
+      document.getElementById('accelVal').innerHTML = mag.toFixed(2) + '<span class="data-card-unit">m/s²</span>';
+      document.getElementById('ax').textContent = state.accX.toFixed(1);
+      document.getElementById('ay').textContent = state.accY.toFixed(1);
+      document.getElementById('az').textContent = state.accZ.toFixed(1);
+
+      const speed = Math.sqrt(state.vx**2 + state.vy**2);
+      document.getElementById('speedVal').textContent = speed.toFixed(2);
+      document.getElementById('distVal').innerHTML = state.distance.toFixed(2) + '<span class="data-card-unit">m</span>';
+
+      pushBar(state.bars.accel, Math.min(mag / 20 * 100, 100));
+      pushBar(state.bars.dist, Math.min(speed / 5 * 100, 100));
+    }
+
+    function updateRotDisplay() {
+      const mag = Math.sqrt(state.rotA**2 + state.rotB**2 + state.rotG**2);
+      document.getElementById('rotVal').innerHTML = mag.toFixed(1) + '<span class="data-card-unit">°/s</span>';
+      document.getElementById('ra').textContent = state.rotA.toFixed(0);
+      document.getElementById('rb').textContent = state.rotB.toFixed(0);
+      document.getElementById('rg').textContent = state.rotG.toFixed(0);
+      pushBar(state.bars.rot, Math.min(mag / 200 * 100, 100));
+    }
+
+    function updateTrackDisplay() {
+      document.getElementById('ptCount').textContent = state.history.length;
+      const drift = Math.sqrt(state.px**2 + state.py**2) / 80;
+      document.getElementById('driftVal').textContent = drift.toFixed(2);
+      drawTrajectory();
+      updatePills();
+    }
+
+    function updatePills() {
+      const g = document.getElementById('stGyro');
+      const a = document.getElementById('stAccel');
+      const t = document.getElementById('stTrack');
+
+      if (state.permission) {
+        g.classList.add('active');
+        g.querySelector('.value').textContent = 'ON';
+        a.classList.add('active');
+        a.querySelector('.value').textContent = 'ON';
+      }
+      t.querySelector('.value').textContent = state.history.length + ' pts';
+    }
+
+    function getHeading(deg) {
+      const d = ((deg % 360) + 360) % 360;
+      if (d >= 337.5 || d < 22.5) return 'N';
+      if (d < 67.5) return 'NE';
+      if (d < 112.5) return 'E';
+      if (d < 157.5) return 'SE';
+      if (d < 202.5) return 'S';
+      if (d < 247.5) return 'SW';
+      if (d < 292.5) return 'W';
+      return 'NW';
+    }
+
+    function pushBar(obj, val) {
+      obj.vals.push(val);
+      if (obj.vals.length > 16) obj.vals.shift();
+      for (let i = 0; i < obj.el.length; i++) {
+        const v = obj.vals[i] || 0;
+        obj.el[i].style.height = Math.max(2, v) + '%';
+      }
+    }
+
+    // ============ 轨迹绘制 ============
+    function drawTrajectory() {
+      const W = canvas.clientWidth;
+      const H = canvas.clientHeight;
+      const cx = W / 2;
+      const cy = H / 2;
+
+      ctx.clearRect(0, 0, W, H);
+
+      // 网格
+      ctx.strokeStyle = 'rgba(0,240,255,0.06)';
+      ctx.lineWidth = 1;
+      const step = 30;
+      for (let x = cx % step; x < W; x += step) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+      }
+      for (let y = cy % step; y < H; y += step) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+      }
+
+      // 中心十字
+      ctx.strokeStyle = 'rgba(0,240,255,0.2)';
+      ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, H); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(W, cy); ctx.stroke();
+
+      // 历史轨迹
+      if (state.history.length < 2) return;
+
+      // 发光轨迹
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+
+      // 外发光
+      ctx.strokeStyle = 'rgba(0, 240, 255, 0.15)';
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      for (let i = 0; i < state.history.length; i++) {
+        const p = state.history[i];
+        const x = cx + p.x;
+        const y = cy - p.y;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // 主体轨迹
+      const grad = ctx.createLinearGradient(0, 0, W, H);
+      grad.addColorStop(0, 'rgba(0,240,255,0.2)');
+      grad.addColorStop(1, 'rgba(0,240,255,1)');
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < state.history.length; i++) {
+        const p = state.history[i];
+        const x = cx + p.x;
+        const y = cy - p.y;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // 当前点脉冲
+      const last = state.history[state.history.length - 1];
+      const lx = cx + last.x;
+      const ly = cy - last.y;
+
+      ctx.fillStyle = 'rgba(0, 240, 255, 0.3)';
+      ctx.beginPath();
+      ctx.arc(lx, ly, 10, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#00f0ff';
+      ctx.beginPath();
+      ctx.arc(lx, ly, 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 绘制一个小箭头指示朝向
+      const rad = (state.alpha - 90) * Math.PI / 180;
+      const arLen = 18;
+      ctx.strokeStyle = '#ff0055';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(lx, ly);
+      ctx.lineTo(lx + Math.cos(rad) * arLen, ly + Math.sin(rad) * arLen);
+      ctx.stroke();
+    }
+
+    // ============ 控制 ============
+    resetBtn.addEventListener('click', () => {
+      state.history = [];
+      state.px = 0; state.py = 0;
+      state.vx = 0; state.vy = 0;
+      state.distance = 0;
+      state.lastT = null;
+      ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+      updateTrackDisplay();
+    });
+
+    calBtn.addEventListener('click', () => {
+      state.cal.x = state.accX;
+      state.cal.y = state.accY;
+      state.cal.z = state.accZ;
+      state.vx = 0; state.vy = 0;
+      // 视觉反馈
+      calBtn.textContent = '已校准';
+      setTimeout(() => calBtn.textContent = '零点校准', 1000);
+    });
+
+    // ============ 启动 ============
+    // 如果在非HTTPS或桌面环境，显示模拟数据按钮
+    if (!window.DeviceOrientationEvent) {
+      permBtn.textContent = '当前设备不支持陀螺仪';
+      permBtn.disabled = true;
+    }
+  </script>
+</body>
+</html>
